@@ -2,13 +2,10 @@ import express from 'express';
 import { Redis } from 'ioredis';
 import nodemailer from 'nodemailer';
 import dotenv from 'dotenv';
-
 // Load environment variables from .env file
 dotenv.config();
-
 const app = express();
 const port = process.env.PORT || 3000;
-
 // Set up Redis connection
 const redisUrl = process.env.REDIS_URL;
 if (!redisUrl) {
@@ -17,7 +14,6 @@ if (!redisUrl) {
 }
 const redis = new Redis(redisUrl);
 const queueName = 'email_queue';
-
 // Set up Nodemailer transporter
 const transporter = nodemailer.createTransport({
     service: "gmail", // or any SMTP service
@@ -26,45 +22,33 @@ const transporter = nodemailer.createTransport({
         pass: process.env.EMAIL_PASS,
     },
 });
-
 console.log('Worker server started. Waiting for emails in the queue...');
-
 // Worker function to process the queue
 async function processQueue() {
     try {
         // Use blocking list pop (BRPOP) to wait for an item in the queue
         // '0' means it will wait indefinitely
         const result = await redis.brpop(queueName, 0);
-
         if (result) {
             const [key, rawMessage] = result;
             console.log("Processing message from queue:", rawMessage);
             const mailOptions = JSON.parse(rawMessage);
-
             // Send the email using the local sendMail function
             await sendMail(mailOptions);
         }
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Error processing queue:', error);
-    } finally {
+    }
+    finally {
         // Recursively call the function to keep processing the queue
         processQueue();
     }
 }
-
 // Mail sending function
-async function sendMail(body: any) {
+async function sendMail(body) {
     try {
-        const {
-            activeSiteDocking,
-            blindDocking,
-            createdAt,
-            ligandTarget,
-            proteinTarget,
-            userEmail,
-            userId,
-        } = body;
-
+        const { activeSiteDocking, blindDocking, createdAt, ligandTarget, proteinTarget, userEmail, userId, } = body;
         // Build HTML content
         const htmlContent = `
             <div style="font-family: Arial, sans-serif; background-color: #f4f6f8; padding: 20px;">
@@ -111,7 +95,6 @@ async function sendMail(body: any) {
                 </div>
             </div>
         `;
-
         // Send email
         await transporter.sendMail({
             from: `"Docking Platform" <${process.env.NEXT_EMAIL}>`,
@@ -119,23 +102,19 @@ async function sendMail(body: any) {
             subject: "Docking Request Submitted",
             html: htmlContent,
         });
-
         console.log(`Email sent successfully to: pthreedatabase@gmail.com`);
-
-    } catch (error) {
+    }
+    catch (error) {
         console.error("Failed to send email:", error);
     }
 }
-
-
 // Start the queue worker
 processQueue();
-
 // Optional: Start a simple Express server to show that the worker is running
 app.get('/', (req, res) => {
     res.status(200).send('Email worker is running and processing the Redis queue.');
 });
-
 app.listen(port, () => {
     console.log(`Server listening on port ${port}`);
 });
+//# sourceMappingURL=server.js.map
