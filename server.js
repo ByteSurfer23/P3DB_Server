@@ -1,14 +1,17 @@
-import express from 'express';
+import express, {} from 'express';
 import { Redis } from 'ioredis';
 import dotenv from 'dotenv';
 import sendMail from './sendMail.js';
-// Load environment variables from .env file
+import pkg from 'prom-client';
+const { Counter, collectDefaultMetrics, register, MetricType } = pkg;
+// Node 20+ fetch is global
 dotenv.config();
 const app = express();
-const port = process.env.PORT || 3001;
-// Middleware to parse JSON bodies
+const port = process.env.PORT ? parseInt(process.env.PORT) : 3001;
 app.use(express.json());
-// Set up Redis connection
+// Prometheus: collect default metrics
+collectDefaultMetrics();
+// Redis setup
 const redisUrl = process.env.REDIS_URL;
 if (!redisUrl) {
     console.error("REDIS_URL environment variable is not set.");
@@ -17,17 +20,14 @@ if (!redisUrl) {
 const redis = new Redis(redisUrl);
 const queueName = 'email_queue';
 console.log('Worker server started. Waiting for emails in the queue...');
-// Worker function to process the queue
+// Worker function
 async function processQueue() {
     try {
-        // Use blocking list pop (BRPOP) to wait for an item in the queue
-        // '0' means it will wait indefinitely
         const result = await redis.brpop(queueName, 0);
         if (result) {
             const [key, rawMessage] = result;
             console.log("Processing message from queue:", rawMessage);
             const mailOptions = JSON.parse(rawMessage);
-            // Send the email using the local sendMail function
             await sendMail(mailOptions);
         }
     }
@@ -35,24 +35,16 @@ async function processQueue() {
         console.error('Error processing queue:', error);
     }
     finally {
-        // Recursively call the function to keep processing the queue
         processQueue();
     }
 }
-// Start the queue worker
 processQueue();
-// API endpoint to add data to the Redis cache
+// POST /compound
 app.post('/compound', async (req, res) => {
     const compoundData = req.body;
-    // Check if the required properties exist in the payload
     const requiredKeys = [
-        'iupacName',
-        'link1',
-        'link2',
-        'molecularFormula',
-        'molecularWeight',
-        'name',
-        'smiles'
+        'iupacName', 'link1', 'link2', 'molecularFormula',
+        'molecularWeight', 'name', 'smiles'
     ];
     const missingKeys = requiredKeys.filter(key => !(key in compoundData));
     if (missingKeys.length > 0) {
@@ -60,9 +52,7 @@ app.post('/compound', async (req, res) => {
     }
     const cacheKey = `compound:${compoundData.name}`;
     try {
-        // Store the compound data in Redis, stringifying it first
         await redis.set(cacheKey, JSON.stringify(compoundData));
-        // Set an expiration time for the key (e.g., 1 hour)
         await redis.expire(cacheKey, 3600);
         console.log(`Successfully added ${compoundData.name} to cache with key: ${cacheKey}`);
         return res.status(201).json({ message: 'Compound data added to cache.' });
@@ -72,20 +62,17 @@ app.post('/compound', async (req, res) => {
         return res.status(500).json({ error: 'Failed to set compound in cache.' });
     }
 });
-// Caching API endpoint to get data from Redis
+// GET /compound/:compoundName
 app.get('/compound/:compoundName', async (req, res) => {
     const { compoundName } = req.params;
     const cacheKey = `compound:${compoundName}`;
     try {
-        // Check Redis cache for the compound data
         const cachedData = await redis.get(cacheKey);
         if (cachedData) {
             console.log(`Cache hit for ${compoundName}`);
-            const data = JSON.parse(cachedData);
-            return res.status(200).json(data);
+            return res.status(200).json(JSON.parse(cachedData));
         }
         else {
-            // Data not in cache, respond with 404 as the client will handle the database lookup
             console.log(`Cache miss for ${compoundName}. Responding with 404.`);
             return res.status(404).json({ error: 'Compound not found in cache.' });
         }
@@ -95,27 +82,79 @@ app.get('/compound/:compoundName', async (req, res) => {
         return res.status(500).json({ error: 'Failed to retrieve compound from cache.' });
     }
 });
-// Optional: Start a simple Express server to show that the worker is running
-const server = app.listen(port, () => {
-    console.log(`Server listening on port ${port}`);
+// Root endpoint
+app.get('/', (_req, res) => res.send('Email worker and caching server are running.'));
+// Prometheus metrics endpoint
+app.get('/metrics', async (_req, res) => {
+    res.set('Content-Type', register.contentType);
+    res.end(await register.metrics());
 });
-app.get('/', (req, res) => {
-    res.status(200).send('Email worker and caching server are running.');
-});
-// Graceful shutdown function
+// ---------------------
+// Grafana Cloud OTLP push
+// ---------------------
+const GRAFANA_OTLP_URL = process.env.GRAFANA_OTLP_URL;
+const GRAFANA_API_KEY = process.env.GRAFANA_API_KEY;
+async function pushMetricsToGrafana() {
+    if (!GRAFANA_OTLP_URL || !GRAFANA_API_KEY)
+        return;
+    try {
+        const metrics = await register.getMetricsAsJSON();
+        const otlpBody = {
+            resourceMetrics: [
+                {
+                    scopeMetrics: [
+                        {
+                            metrics: metrics.map(m => ({
+                                name: m.name,
+                                description: m.help,
+                                unit: "1",
+                                gauge: {
+                                    dataPoints: m.type === MetricType.Counter
+                                        ? m.values.map(v => ({
+                                            value: v.value,
+                                            timeUnixNano: Date.now() * 1e6,
+                                            attributes: Object.entries(v.labels || {}).map(([k, val]) => ({
+                                                key: k,
+                                                value: { stringValue: val }
+                                            }))
+                                        }))
+                                        : []
+                                }
+                            }))
+                        }
+                    ]
+                }
+            ]
+        };
+        const response = await fetch(GRAFANA_OTLP_URL, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${GRAFANA_API_KEY}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(otlpBody)
+        });
+        console.log(`Pushed metrics to Grafana Cloud. Status: ${response.status}`);
+    }
+    catch (err) {
+        console.error('Error pushing metrics to Grafana Cloud:', err);
+    }
+}
+// Push metrics every 15 seconds
+setInterval(pushMetricsToGrafana, 15000);
+// ---------------------
+// Start server
+// ---------------------
+const server = app.listen(port, () => console.log(`Server listening on port ${port}`));
+// Graceful shutdown
 function shutdown() {
     console.log('\nShutting down gracefully...');
-    // Close Express server
-    server.close(() => {
-        console.log('Express server closed.');
-    });
-    // Close Redis connection
+    server.close(() => console.log('Express server closed.'));
     redis.quit(() => {
         console.log('Redis connection closed.');
         process.exit(0);
     });
 }
-// Listen for shutdown signals
-process.on('SIGTERM', shutdown); // For process managers
-process.on('SIGINT', shutdown); // For Ctrl+C
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
 //# sourceMappingURL=server.js.map
