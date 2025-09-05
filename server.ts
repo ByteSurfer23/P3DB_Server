@@ -2,7 +2,8 @@ import express, { type Request, type Response } from 'express';
 import { Redis } from 'ioredis';
 import dotenv from 'dotenv';
 import sendMail from './sendMail.js';
-import client, { Counter, MetricType } from 'prom-client';
+import pkg from 'prom-client';
+const { Counter, collectDefaultMetrics, register, MetricType } = pkg;
 
 // Node 20+ fetch is global
 dotenv.config();
@@ -13,13 +14,8 @@ const port = process.env.PORT ? parseInt(process.env.PORT) : 3001;
 app.use(express.json());
 
 // Prometheus: collect default metrics
-client.collectDefaultMetrics();
+collectDefaultMetrics();
 
-// Custom HTTP request counter
-const httpRequestCounter: Counter<string> = new client.Counter({
-  name: 'http_requests_total',
-  help: 'Total HTTP Requests'
-});
 
 // Redis setup
 const redisUrl = process.env.REDIS_URL;
@@ -102,8 +98,8 @@ app.get('/', (_req: Request, res: Response) => res.send('Email worker and cachin
 
 // Prometheus metrics endpoint
 app.get('/metrics', async (_req: Request, res: Response) => {
-  res.set('Content-Type', client.register.contentType);
-  res.end(await client.register.metrics());
+  res.set('Content-Type', register.contentType);
+  res.end(await register.metrics());
 });
 
 // ---------------------
@@ -116,7 +112,7 @@ async function pushMetricsToGrafana(): Promise<void> {
   if (!GRAFANA_OTLP_URL || !GRAFANA_API_KEY) return;
 
   try {
-    const metrics = await client.register.getMetricsAsJSON();
+    const metrics = await register.getMetricsAsJSON();
 
     const otlpBody = {
       resourceMetrics: [
