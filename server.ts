@@ -94,7 +94,10 @@ app.get('/compound/:compoundName', async (req: Request, res: Response) => {
 });
 
 // Root endpoint
-app.get('/', (_req: Request, res: Response) => res.send('Email worker and caching server are running.'));
+app.get('/', (_req: Request, res: Response) => {
+  res.send('Email worker and caching server are running.');
+  console.log("Server is being polled");
+});
 
 // Prometheus metrics endpoint
 app.get('/metrics', async (_req: Request, res: Response) => {
