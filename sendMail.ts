@@ -36,11 +36,11 @@ export default async function sendMail(body: any) {
                         <table style="width: 100%; border-collapse: collapse;">
                             <tr style="background-color: #f8f9fa;">
                                 <td style="padding: 10px; font-weight: bold;">Active Site Docking</td>
-                                <td style="padding: 10px;">${activeSiteDocking ? "Yes" : "No"}</td>
+                                <td style="padding: 10px;">${activeSiteDocking === "no" ? "No" : "Yes"}</td>
                             </tr>
                             <tr>
                                 <td style="padding: 10px; font-weight: bold;">Blind Docking</td>
-                                <td style="padding: 10px;">${blindDocking ? "Yes" : "No"}</td>
+                                <td style="padding: 10px;">${blindDocking === "no" ? "No" : "Yes"}</td>
                             </tr>
                             <tr style="background-color: #f8f9fa;">
                                 <td style="padding: 10px; font-weight: bold;">Protein Target</td>
